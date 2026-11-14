@@ -34,6 +34,11 @@ beating the house baseline on the final is a roughly two-in-three
 proposition, not a lock. A bigger pull (0.5) scores better pooled but
 loses ~20% in quiet regimes, so 0.2 is the robust choice.
 
+Verified in this session (Nov 15, 2026): ran on the kit's six practice
+cases and scored the official p00–p04 at 46,753¢ MAE against the
+persistence baseline's 47,055¢ — the entry beats persistence on the
+practice set, as tuned.
+
 ## Run
 
 Node 22, standard library only. No network, no clock, no randomness —

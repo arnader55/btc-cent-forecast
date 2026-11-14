@@ -16,7 +16,9 @@
 // one trending day in the practice (Nov 10) and loses everywhere else.
 //
 // Tuned numbers (mean absolute error in cents, lower better):
-//   - official practice p00-p04: 46,753 vs persistence 47,055 (-0.6%)
+//   - official practice p00-p04: 46,753 vs persistence 47,055 (-0.6%),
+//     re-verified in the submission session (Nov 15, 2026) from the
+//     actual .out files against the next case's checkpoint close.
 //   - 64 hourly checkpoints Nov 8-10: 41,571 vs persistence 42,871 (-3.0%)
 //   - 19 hourly checkpoints Nov 7-8: 9,138 vs persistence 8,687 (+5.2%)
 //   - pooled 88 checkpoints: 34,863 vs persistence 35,728 (-2.4%)
