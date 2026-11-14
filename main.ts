@@ -1,92 +1,69 @@
-// btc-cent-forecast-01 entry (Node 22, standard library only).
+// btc-cent-forecast-01 — forecast BTC's US-dollar price 240 minutes after
+// a checkpoint, from the 4,320 one-minute closes of the 72 hours up to it.
 //
-// A point forecaster for Bitcoin's US-dollar price 240 minutes (4 hours)
-// after each checkpoint. One idea, tuned on the six public practice cases
-// and on 83 extra hourly checkpoints cut from the same recording (Nov 7-10,
-// 2026), and kept small on purpose: at this horizon Bitcoin's 4-hour move
-// is mostly noise, so a big adjustment loses more often than it wins.
+// Strategy: a small mean-reversion pull. The last print is trusted most of
+// the way; the guess only leans one fifth of the way back toward the
+// trailing 6-hour mean, because at a 4-hour horizon BTC's move is mostly
+// noise and a big adjustment loses more often than it wins.
 //
-//   guess = last + 0.2 * (mean of the last 360 closes - last),
-//   with the adjustment capped at +/-1% of the last price.
+//   guess = last + 0.2 * (mean of last 360 closes - last)
+//   adjustment capped at +/-1% of last, rounded to the 5-decimal grid.
 //
-// The 6-hour trailing mean is the local level; the last print is often a
-// few dollars off it (stale minutes, wicks), so the guess is pulled one
-// fifth of the way back toward the level instead of trusting the print
-// outright. Trend extrapolation was tried and rejected: it wins on the
-// one trending day in the practice (Nov 10) and loses everywhere else.
-//
-// Tuned numbers (mean absolute error in cents, lower better):
-//   - official practice p00-p04: 46,753 vs persistence 47,055 (-0.6%),
-//     re-verified in the submission session (Nov 15, 2026) from the
-//     actual .out files against the next case's checkpoint close.
-//   - 64 hourly checkpoints Nov 8-10: 41,571 vs persistence 42,871 (-3.0%)
-//   - 19 hourly checkpoints Nov 7-8: 9,138 vs persistence 8,687 (+5.2%)
-//   - pooled 88 checkpoints: 34,863 vs persistence 35,728 (-2.4%)
-//   - beats persistence on 70% of simulated 12-case windows (hourly
-//     starts) and 80% (4-hour starts). The edge is small: beating the
-//     house baseline on the final is a roughly two-in-three proposition,
-//     not a lock. A bigger pull (lambda 0.5) scores better pooled but
-//     loses ~20% in quiet regimes, so 0.2 is the robust choice.
-//
-// Everything is a pure function of the case file: no randomness, no
-// network, no clock, so two runs write the same bytes. Reads every
-// <id>.in in the input directory and writes <id>.out for each, like the
-// kit's starter:
-//
-//   mkdir -p out && MAKEFUN_INPUT_DIR=input MAKEFUN_OUTPUT_DIR=out node main.ts
+// Node 22, standard library only. No network, no clock, no randomness:
+// two runs on the same case write the same bytes.
 
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
-const INPUT_DIR = process.env.MAKEFUN_INPUT_DIR ?? '/input';
-const OUTPUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+const INPUT_DIR = process.env.MAKEFUN_INPUT_DIR ?? "/input";
+const OUTPUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
 
-/** Trailing window for the local level, in minutes of closes. */
-const REV_WINDOW_MIN = 360;
-/** How far the guess is pulled from the last print toward the level. */
-const REV_LAMBDA = 0.2;
-/** The adjustment is capped at this fraction of the last price. */
-const CAP_FRAC = 0.01;
+const PULL = 0.2; // fraction of the gap to the trailing mean to close
+const WINDOW = 360; // minutes of trailing mean (6 hours)
+const CAP_FRACTION = 0.01; // max adjustment, as a fraction of the last print
+const GRID = 1e5; // prices live on a 5-decimal grid
 
-/** The smallest positive price on the grid: one unit of its 5 decimals. */
-const MIN_PRICE = 0.00001;
-/** The largest grid price below the scorer's exclusive 10,000,000-dollar cap. */
-const MAX_PRICE = 9_999_999.99999;
+function forecast(prices: number[]): number {
+  if (!Array.isArray(prices) || prices.length === 0) {
+    throw new Error("case holds no prices");
+  }
+  const last = prices[prices.length - 1];
+  if (typeof last !== "number" || !Number.isFinite(last) || last <= 0) {
+    throw new Error("last close is not a positive finite number");
+  }
+  // Only finite closes count toward the level; a bad sample must not drag it.
+  const window = prices.slice(-WINDOW).filter((p) => Number.isFinite(p));
+  if (window.length === 0) {
+    throw new Error("no finite closes in the trailing window");
+  }
+  let sum = 0;
+  for (const p of window) sum += p;
+  const mean = sum / window.length;
 
-interface CaseMarket {
-  id: string;
-  prices: number[];
+  const pull = PULL * (mean - last);
+  const cap = CAP_FRACTION * last;
+  const adjustment = Math.max(-cap, Math.min(cap, pull));
+
+  const raw = last + adjustment;
+  const rounded = Math.round(raw * GRID) / GRID;
+  // The rules require a finite price in (0, 10_000_000).
+  return Math.min(9_999_999.99999, Math.max(0.00001, rounded));
 }
 
-interface Case {
-  markets: CaseMarket[];
+function main(): void {
+  mkdirSync(OUTPUT_DIR, { recursive: true });
+  const files = readdirSync(INPUT_DIR)
+    .filter((f) => f.endsWith(".in"))
+    .sort();
+  for (const file of files) {
+    const raw = readFileSync(join(INPUT_DIR, file), "utf8");
+    const kase = JSON.parse(raw);
+    const id = typeof kase.case === "string" ? kase.case : file.replace(/\.in$/, "");
+    const prices: number[] = kase.markets[0].prices;
+    const price = forecast(prices);
+    const out = JSON.stringify({ forecasts: [{ case: id, price }] });
+    writeFileSync(join(OUTPUT_DIR, `${id}.out`), out + "\n", "utf8");
+  }
 }
 
-/** x kept on the grid's 5 decimals and inside the scorer's (0, 10,000,000). */
-const price5 = (x: number): number => Math.round(Math.min(MAX_PRICE, Math.max(MIN_PRICE, x)) * 1e5) / 1e5;
-
-/** Mean of a list of numbers (0 for an empty list). */
-function mean(xs: number[]): number {
-  if (xs.length === 0) return 0;
-  return xs.reduce((a, b) => a + b, 0) / xs.length;
-}
-
-/** The forecast of one market: last print pulled toward the 6-hour mean. */
-function forecast(m: CaseMarket): number {
-  if (!Array.isArray(m.prices) || m.prices.length === 0) throw new Error(`market ${m.id} has no prices`);
-  const x = m.prices[m.prices.length - 1] as number;
-  if (typeof x !== 'number' || !Number.isFinite(x)) throw new Error(`market ${m.id}'s last price is not a finite number`);
-  const level = mean(m.prices.slice(-REV_WINDOW_MIN));
-  const capped = x + Math.min(CAP_FRAC * x, Math.max(-CAP_FRAC * x, REV_LAMBDA * (level - x)));
-  return price5(capped);
-}
-
-mkdirSync(OUTPUT_DIR, { recursive: true });
-// Every case file, in name order, so two runs write the same bytes.
-const inputs = readdirSync(INPUT_DIR).filter((f) => f.endsWith('.in')).sort();
-for (const file of inputs) {
-  const id = file.slice(0, -'.in'.length);
-  const c = JSON.parse(readFileSync(join(INPUT_DIR, file), 'utf8')) as Case;
-  if (!Array.isArray(c.markets) || c.markets.length !== 1) throw new Error(`${file} does not hold exactly one market`);
-  writeFileSync(join(OUTPUT_DIR, `${id}.out`), `${JSON.stringify({ forecasts: [{ case: id, price: forecast(c.markets[0] as CaseMarket) }] })}\n`);
-}
+main();
